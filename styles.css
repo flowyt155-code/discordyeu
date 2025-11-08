@@ -6,7 +6,7 @@
 
 body {
     font-family: 'Whitney', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    background-color: #36393f;
+    background: linear-gradient(135deg, #0f1419 0%, #1a1d29 50%, #2d1b69 100%);
     color: #dcddde;
     display: flex;
     height: 100vh;
@@ -16,7 +16,7 @@ body {
 /* Server List Styles */
 .server-list {
     width: 72px;
-    background-color: #202225;
+    background: transparent;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -60,7 +60,7 @@ body {
 /* Channel List Styles */
 .channel-list {
     width: 240px;
-    background-color: #2f3136;
+    background: transparent;
     display: flex;
     flex-direction: column;
 }
@@ -71,7 +71,7 @@ body {
     align-items: center;
     justify-content: space-between;
     padding: 0 16px;
-    border-bottom: 1px solid #202225;
+    border-bottom: 1px solid rgba(32, 34, 37, 0.5);
     cursor: pointer;
     transition: background-color 0.2s;
     font-weight: 600;
@@ -162,7 +162,7 @@ body {
 /* User Panel Styles */
 .user-panel {
     height: 52px;
-    background-color: #292b2f;
+    background: rgba(41, 43, 47, 0.9);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -201,7 +201,7 @@ body {
 
 .user-status {
     font-size: 12px;
-    color: #b9bbbe;
+    color: #3ba55d;
 }
 
 .user-controls {
@@ -234,7 +234,7 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    background-color: #36393f;
+    background: transparent;
     position: relative;
 }
 
@@ -266,7 +266,7 @@ body {
 
 .chat-header {
     height: 48px;
-    border-bottom: 1px solid #202225;
+    border-bottom: 1px solid rgba(32, 34, 37, 0.5);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -379,7 +379,7 @@ body {
 }
 
 .message-input-wrapper {
-    background-color: #40444b;
+    background: rgba(64, 68, 75, 0.9);
     border-radius: 8px;
     padding: 0 16px;
     display: flex;
@@ -615,31 +615,36 @@ body {
 .call-control-btn {
     width: 48px;
     height: 48px;
-    background-color: #40444b;
-    border: none;
+    background: linear-gradient(135deg, #1d2b64 0%, #f8cdda 100%);
+    border: 2px solid rgba(255, 255, 255, 0.2);
     border-radius: 50%;
-    color: #b9bbbe;
+    color: #ffffff;
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
     transition: all 0.2s;
     position: relative;
+    box-shadow: 0 4px 12px rgba(29, 43, 100, 0.3);
 }
 
 .call-control-btn:hover {
-    background-color: #464a52;
-    color: #ffffff;
+    background: linear-gradient(135deg, #2a3a7a 0%, #f9d4e6 100%);
+    border-color: rgba(255, 255, 255, 0.4);
     transform: scale(1.1);
+    box-shadow: 0 6px 16px rgba(29, 43, 100, 0.4);
 }
 
 .call-control-btn.active {
-    background-color: #ed4245;
+    background: linear-gradient(135deg, #e91e63 0%, #f06292 100%);
+    border-color: rgba(255, 255, 255, 0.6);
     color: white;
+    box-shadow: 0 4px 12px rgba(233, 30, 99, 0.4);
 }
 
 .call-control-btn.active:hover {
-    background-color: #c03537;
+    background: linear-gradient(135deg, #c2185b 0%, #d81b60 100%);
+    box-shadow: 0 6px 16px rgba(233, 30, 99, 0.5);
 }
 
 .call-control-btn svg {
@@ -648,12 +653,15 @@ body {
 }
 
 .call-control-btn.screen-active {
-    background: linear-gradient(135deg, #3ba55d 0%, #43b581 100%);
+    background: linear-gradient(135deg, #4caf50 0%, #66bb6a 100%);
+    border-color: rgba(255, 255, 255, 0.6);
     color: white;
+    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.4);
 }
 
 .call-control-btn.screen-active:hover {
-    background: linear-gradient(135deg, #2d8f4e 0%, #35a069 100%);
+    background: linear-gradient(135deg, #388e3c 0%, #4caf50 100%);
+    box-shadow: 0 6px 16px rgba(76, 175, 80, 0.5);
 }
 
 /* Video Size Controls */
@@ -912,7 +920,7 @@ body {
 
 .friends-header {
     height: 48px;
-    border-bottom: 1px solid #202225;
+    border-bottom: 1px solid rgba(32, 34, 37, 0.5);
     display: flex;
     align-items: center;
     padding: 0 16px;
@@ -1011,6 +1019,18 @@ body {
 }
 
 .friend-status.offline {
+    color: #747f8d;
+}
+
+/* DM Status */
+.dm-status {
+    font-size: 12px;
+    color: #3ba55d;
+    margin-left: auto;
+    opacity: 0.8;
+}
+
+.dm-status.offline {
     color: #747f8d;
 }
 

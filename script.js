@@ -44,13 +44,11 @@ function initializeApp() {
     initializeMessageInput();
     initializeUserControls();
     initializeCallControls();
-    initializeServerManagement();
     initializeFileUpload();
     initializeEmojiPicker();
     initializeDraggableCallWindow();
     connectToSocketIO();
     requestNotificationPermission();
-    loadUserServers();
     showFriendsView();
 }
 
@@ -94,16 +92,21 @@ function connectToSocketIO() {
                 channels[channelName] = [];
             }
             channels[channelName].push(data.message);
-            
+
             if (channelName === currentChannel && currentView === 'server') {
                 addMessageToUI(data.message);
                 scrollToBottom();
             }
-            
+
             if (document.hidden) {
                 showNotification('New Message', `${data.message.author}: ${data.message.text}`);
             }
         });
+
+function getChannelNameById(id) {
+    // This is a temporary solution. A better approach would be to have a proper mapping.
+    return id === 1 ? 'general' : 'random';
+}
         
         socket.on('reaction-update', (data) => {
             updateMessageReactions(data.messageId, data.reactions);
@@ -112,12 +115,17 @@ function connectToSocketIO() {
         // WebRTC Signaling
         socket.on('user-joined-voice', (data) => {
             console.log('User joined voice:', data);
-            createPeerConnection(data.socketId, true);
+            if (data.socketId !== socket.id) { // Don't connect to yourself
+                createPeerConnection(data.socketId, true);
+            }
         });
 
         socket.on('existing-voice-users', (users) => {
+            console.log('Existing voice users:', users);
             users.forEach(user => {
-                createPeerConnection(user.socketId, false);
+                if (user.socketId !== socket.id) { // Don't connect to yourself
+                    createPeerConnection(user.socketId, false);
+                }
             });
         });
 
@@ -208,10 +216,17 @@ function connectToSocketIO() {
             console.log('Call accepted by:', data.from);
             // When call is accepted, create peer connection
             document.querySelector('.call-channel-name').textContent = `Connected with ${data.from.username}`;
-            
+
             // Create peer connection as initiator
             if (!peerConnections[data.from.socketId]) {
                 createPeerConnection(data.from.socketId, true);
+            }
+
+            // Ensure local stream is playing
+            const localVideo = document.getElementById('localVideo');
+            if (localVideo && localStream) {
+                localVideo.srcObject = localStream;
+                localVideo.play().catch(e => console.error('Error playing local video:', e));
             }
         });
 
@@ -293,21 +308,34 @@ async function loadFriends() {
     }
 }
 
+async function loadAllUsers() {
+    try {
+        const response = await fetch('/api/users', {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        const users = await response.json();
+        return users;
+    } catch (error) {
+        console.error('Error loading users:', error);
+        return [];
+    }
+}
+
 function displayFriends(friends) {
     const onlineList = document.getElementById('friendsOnline');
     const allList = document.getElementById('friendsAll');
-    
+
     onlineList.innerHTML = '';
     allList.innerHTML = '';
-    
+
     if (friends.length === 0) {
         onlineList.innerHTML = '<div class="friends-empty">No friends yet</div>';
         allList.innerHTML = '<div class="friends-empty">No friends yet</div>';
         return;
     }
-    
+
     const onlineFriends = friends.filter(f => f.status === 'Online');
-    
+
     if (onlineFriends.length === 0) {
         onlineList.innerHTML = '<div class="friends-empty">No one is online</div>';
     } else {
@@ -315,7 +343,7 @@ function displayFriends(friends) {
             onlineList.appendChild(createFriendItem(friend));
         });
     }
-    
+
     friends.forEach(friend => {
         allList.appendChild(createFriendItem(friend));
     });
@@ -324,7 +352,7 @@ function displayFriends(friends) {
 function createFriendItem(friend) {
     const div = document.createElement('div');
     div.className = 'friend-item';
-    
+
     div.innerHTML = `
         <div class="friend-avatar">${friend.avatar || friend.username.charAt(0).toUpperCase()}</div>
         <div class="friend-info">
@@ -343,7 +371,7 @@ function createFriendItem(friend) {
     div.querySelector('.audio-call').addEventListener('click', () => initiateCall(friend.id, 'audio'));
     div.querySelector('.video-call').addEventListener('click', () => initiateCall(friend.id, 'video'));
     div.querySelector('.remove').addEventListener('click', () => removeFriend(friend.id));
-    
+
     return div;
 }
 
@@ -582,30 +610,41 @@ function showIncomingCall(caller, type) {
     const incomingCallDiv = document.getElementById('incomingCall');
     const callerName = incomingCallDiv.querySelector('.caller-name');
     const callerAvatar = incomingCallDiv.querySelector('.caller-avatar');
-    
+
     callerName.textContent = caller.username || 'Unknown User';
     callerAvatar.textContent = caller.avatar || caller.username?.charAt(0).toUpperCase() || 'U';
-    
+
     incomingCallDiv.classList.remove('hidden');
-    
+
+    // Play call sound
+    const callSound = new Audio('/assets/59ffb9a2c698e21.mp3');
+    callSound.loop = true;
+    callSound.play().catch(e => console.error('Error playing call sound:', e));
+
     // Set up accept/reject handlers
     const acceptBtn = document.getElementById('acceptCallBtn');
     const rejectBtn = document.getElementById('rejectCallBtn');
-    
+
     acceptBtn.onclick = async () => {
         incomingCallDiv.classList.add('hidden');
+        callSound.pause();
+        callSound.currentTime = 0;
         await acceptCall(caller, type);
     };
-    
+
     rejectBtn.onclick = () => {
         incomingCallDiv.classList.add('hidden');
+        callSound.pause();
+        callSound.currentTime = 0;
         rejectCall(caller);
     };
-    
+
     // Auto-reject after 30 seconds
     setTimeout(() => {
         if (!incomingCallDiv.classList.contains('hidden')) {
             incomingCallDiv.classList.add('hidden');
+            callSound.pause();
+            callSound.currentTime = 0;
             rejectCall(caller);
         }
     }, 30000);
@@ -699,9 +738,19 @@ window.startDM = async function(friendId, friendUsername) {
         <div class="friend-avatar">${friendUsername.charAt(0).toUpperCase()}</div>
         <span class="channel-name">${friendUsername}</span>
     `;
-    
+
     document.getElementById('messageInput').placeholder = `Message @${friendUsername}`;
-    
+
+    // Show DM-specific controls
+    document.getElementById('audioCallBtn').style.display = 'block';
+    document.getElementById('videoCallBtn').style.display = 'block';
+    document.getElementById('removeFriendBtn').style.display = 'block';
+
+    // Add event listeners for DM controls
+    document.getElementById('audioCallBtn').onclick = () => initiateCall(friendId, 'audio');
+    document.getElementById('videoCallBtn').onclick = () => initiateCall(friendId, 'video');
+    document.getElementById('removeFriendBtn').onclick = () => removeFriend(friendId);
+
     await loadDMHistory(friendId);
 };
 
@@ -715,105 +764,43 @@ function showFriendsView() {
     document.getElementById('chatView').style.display = 'none';
     document.getElementById('channelsView').style.display = 'none';
     document.getElementById('dmListView').style.display = 'block';
-    
+
     document.getElementById('serverName').textContent = 'Friends';
-    
+
     document.querySelectorAll('.server-icon').forEach(icon => icon.classList.remove('active'));
-    document.getElementById('friendsBtn').classList.add('active');
-    
+    const friendsBtn = document.getElementById('friendsBtn');
+    if (friendsBtn) {
+        friendsBtn.classList.add('active');
+        friendsBtn.classList.add('home');
+    }
+
+    // Load friends data
+    loadFriends();
+
     // Hide chat and show friends content
     document.getElementById('chatView').style.display = 'none';
     document.getElementById('friendsView').style.display = 'flex';
 }
 
-// Show server view
-function showServerView(server) {
-    currentView = 'server';
-    currentServerId = server.id;
-    currentDMUserId = null;
+// Server view removed
 
-    document.getElementById('friendsView').style.display = 'none';
-    document.getElementById('chatView').style.display = 'flex';
-    document.getElementById('channelsView').style.display = 'block';
-    document.getElementById('dmListView').style.display = 'none';
-
-    document.getElementById('serverName').textContent = server.name;
-    switchChannel('general');
-}
-
-async function loadUserServers() {
-    try {
-        const response = await fetch('/api/servers', {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        servers = await response.json();
-        servers.forEach(server => addServerToUI(server, false));
-    } catch (error) {
-        console.error('Error loading servers:', error);
-    }
-}
+// Server loading removed
 
 function initializeServerManagement() {
     const friendsBtn = document.getElementById('friendsBtn');
     const addServerBtn = document.getElementById('addServerBtn');
-    
+
     friendsBtn.addEventListener('click', () => {
         showFriendsView();
     });
-    
-    addServerBtn.addEventListener('click', () => {
-        createNewServer();
-    });
+
+    // Remove server creation functionality
+    addServerBtn.style.display = 'none';
 }
 
-async function createNewServer() {
-    const serverName = prompt('Enter server name:');
-    
-    if (!serverName || serverName.trim() === '') return;
-    
-    try {
-        const response = await fetch('/api/servers', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${token}`,
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ name: serverName.trim() })
-        });
-        
-        if (response.ok) {
-            const server = await response.json();
-            servers.push(server);
-            addServerToUI(server, true);
-        }
-    } catch (error) {
-        console.error('Error creating server:', error);
-        alert('Failed to create server');
-    }
-}
+// Server creation removed
 
-function addServerToUI(server, switchTo = false) {
-    const serverList = document.querySelector('.server-list');
-    const addServerBtn = document.getElementById('addServerBtn');
-    
-    const serverIcon = document.createElement('div');
-    serverIcon.className = 'server-icon';
-    serverIcon.textContent = server.icon;
-    serverIcon.title = server.name;
-    serverIcon.setAttribute('data-server-id', server.id);
-    
-    serverIcon.addEventListener('click', () => {
-        document.querySelectorAll('.server-icon').forEach(icon => icon.classList.remove('active'));
-        serverIcon.classList.add('active');
-        showServerView(server);
-    });
-    
-    serverList.insertBefore(serverIcon, addServerBtn);
-    
-    if (switchTo) {
-        serverIcon.click();
-    }
-}
+// Server UI functionality removed
 
 function initializeChannels() {
     const channelElements = document.querySelectorAll('.channel');
@@ -834,16 +821,18 @@ function initializeChannels() {
 
 function switchChannel(channelName) {
     currentChannel = channelName;
-    
+
     document.querySelectorAll('.text-channel').forEach(ch => ch.classList.remove('active'));
     const channelEl = document.querySelector(`[data-channel="${channelName}"]`);
     if (channelEl) channelEl.classList.add('active');
-    
+
     document.getElementById('currentChannelName').textContent = channelName;
     document.getElementById('messageInput').placeholder = `Message #${channelName}`;
-    
+
     loadChannelMessages(channelName);
 }
+
+// Server channel functionality removed
 
 async function loadChannelMessages(channelName) {
     const messagesContainer = document.getElementById('messagesContainer');
@@ -891,7 +880,7 @@ function initializeMessageInput() {
 function sendMessage() {
     const messageInput = document.getElementById('messageInput');
     const text = messageInput.value.trim();
-    
+
     if (text === '') return;
 
     const message = {
@@ -912,8 +901,13 @@ function sendMessage() {
             });
         }
     }
-    
+
     messageInput.value = '';
+}
+
+function getChannelIdByName(name) {
+    // This is a temporary solution. A better approach would be to have a proper mapping.
+    return name === 'general' ? 1 : 2;
 }
 
 function addMessageToUI(message) {
@@ -1192,24 +1186,31 @@ async function joinVoiceChannel(channelName) {
         }
         return;
     }
-    
+
     inCall = true;
-    
+
     document.querySelectorAll('.voice-channel').forEach(ch => ch.classList.remove('in-call'));
     const channelEl = document.querySelector(`[data-channel="${channelName}"]`);
     if (channelEl) channelEl.classList.add('in-call');
-    
+
     const callInterface = document.getElementById('callInterface');
     callInterface.classList.remove('hidden');
-    
+
     document.querySelector('.call-channel-name').textContent = channelName;
-    
+
     try {
         await initializeMedia();
-        
+
         // Connect to the socket for voice
         if (socket && socket.connected) {
             socket.emit('join-voice-channel', { channelName, userId: currentUser.id });
+
+            // Request existing users in the channel after a short delay
+            setTimeout(() => {
+                if (socket && socket.connected) {
+                    socket.emit('request-existing-voice-users', { channelName });
+                }
+            }, 500);
         }
 
     } catch (error) {
@@ -1498,15 +1499,9 @@ function initializeDraggableCallWindow() {
    });
 }
 
-function getChannelIdByName(name) {
-   // This is a temporary solution. A better approach would be to have a proper mapping.
-   return name === 'general' ? 1 : 2;
-}
+// This function is now replaced by getChannelIdByName above
 
-function getChannelNameById(id) {
-   // This is a temporary solution. A better approach would be to have a proper mapping.
-   return id === 1 ? 'general' : 'random';
-}
+// This function is no longer needed as we now use proper channel IDs
 
 async function loadDMHistory(userId) {
    const messagesContainer = document.getElementById('messagesContainer');
@@ -1542,42 +1537,45 @@ if (currentUser) {
    console.log('Logged in as:', currentUser.username);
 }
 
-function populateDMList(friends) {
-   const dmList = document.getElementById('dmList');
-   dmList.innerHTML = '';
+async function populateDMList(friends) {
+    const dmList = document.getElementById('dmList');
+    dmList.innerHTML = '';
 
-   if (friends.length === 0) {
-       const emptyDM = document.createElement('div');
-       emptyDM.className = 'empty-dm-list';
-       emptyDM.textContent = 'No conversations yet.';
-       dmList.appendChild(emptyDM);
-       return;
-   }
+    if (friends.length === 0) {
+        const emptyDM = document.createElement('div');
+        emptyDM.className = 'empty-dm-list';
+        emptyDM.textContent = 'No conversations yet.';
+        dmList.appendChild(emptyDM);
+        return;
+    }
 
-   friends.forEach(friend => {
-       const dmItem = document.createElement('div');
-       dmItem.className = 'channel';
-       dmItem.setAttribute('data-dm-id', friend.id);
-       dmItem.innerHTML = `
-           <div class="friend-avatar">${friend.avatar || friend.username.charAt(0).toUpperCase()}</div>
-           <span>${friend.username}</span>
-       `;
-       dmItem.addEventListener('click', () => {
-           startDM(friend.id, friend.username);
-       });
-       dmList.appendChild(dmItem);
-   });
+    friends.forEach(friend => {
+        const dmItem = document.createElement('div');
+        dmItem.className = 'channel';
+        dmItem.setAttribute('data-dm-id', friend.id);
+
+        const statusClass = friend.status === 'Online' ? '' : 'offline';
+        dmItem.innerHTML = `
+            <div class="friend-avatar">${friend.avatar || friend.username.charAt(0).toUpperCase()}</div>
+            <span>${friend.username}</span>
+            <div class="dm-status ${statusClass}">${friend.status}</div>
+        `;
+        dmItem.addEventListener('click', () => {
+            startDM(friend.id, friend.username);
+        });
+        dmList.appendChild(dmItem);
+    });
 }
 
 // WebRTC Functions
 function createPeerConnection(remoteSocketId, isInitiator) {
     console.log(`Creating peer connection with ${remoteSocketId}, initiator: ${isInitiator}`);
-    
+
     if (peerConnections[remoteSocketId]) {
         console.log('Peer connection already exists');
         return peerConnections[remoteSocketId];
     }
-    
+
     const pc = new RTCPeerConnection({
         iceServers: [
             { urls: 'stun:stun.l.google.com:19302' },
@@ -1595,15 +1593,15 @@ function createPeerConnection(remoteSocketId, isInitiator) {
     if (localStream) {
         const audioTracks = localStream.getAudioTracks();
         const videoTracks = localStream.getVideoTracks();
-        
+
         console.log(`Adding tracks - Audio: ${audioTracks.length}, Video: ${videoTracks.length}`);
-        
+
         // Add audio tracks first (priority for voice calls)
         audioTracks.forEach(track => {
             console.log(`Adding audio track: ${track.label}, enabled: ${track.enabled}`);
             pc.addTrack(track, localStream);
         });
-        
+
         // Then add video tracks
         videoTracks.forEach(track => {
             console.log(`Adding video track: ${track.label}, enabled: ${track.enabled}`);
@@ -1623,7 +1621,7 @@ function createPeerConnection(remoteSocketId, isInitiator) {
             });
         }
     };
-    
+
     // Handle connection state changes
     pc.oniceconnectionstatechange = () => {
         console.log(`ICE connection state: ${pc.iceConnectionState}`);
@@ -1640,27 +1638,28 @@ function createPeerConnection(remoteSocketId, isInitiator) {
     // Handle incoming remote stream
     pc.ontrack = (event) => {
         console.log('Received remote track:', event.track.kind, 'Stream ID:', event.streams[0]?.id);
-        
+
         const remoteParticipants = document.getElementById('remoteParticipants');
-        
+
         let participantDiv = document.getElementById(`participant-${remoteSocketId}`);
         let remoteVideo = document.getElementById(`remote-${remoteSocketId}`);
-        
+
         if (!participantDiv) {
             participantDiv = document.createElement('div');
             participantDiv.className = 'participant';
             participantDiv.id = `participant-${remoteSocketId}`;
-            
+
             remoteVideo = document.createElement('video');
             remoteVideo.id = `remote-${remoteSocketId}`;
             remoteVideo.autoplay = true;
             remoteVideo.playsInline = true;
             remoteVideo.volume = isDeafened ? 0 : 1; // Respect deafened state
-            
+            remoteVideo.muted = false; // Ensure not muted
+
             const participantName = document.createElement('div');
             participantName.className = 'participant-name';
             participantName.textContent = 'Friend';
-            
+
             participantDiv.appendChild(remoteVideo);
             participantDiv.appendChild(participantName);
             remoteParticipants.appendChild(participantDiv);
@@ -1672,15 +1671,21 @@ function createPeerConnection(remoteSocketId, isInitiator) {
             remoteVideo = document.getElementById(`remote-${remoteSocketId}`);
             if (remoteVideo) {
                 remoteVideo.srcObject = event.streams[0];
-                
-                // Ensure audio is playing
-                remoteVideo.play().catch(e => {
-                    console.error('Error playing remote video:', e);
-                    // Try to play after user interaction
-                    document.addEventListener('click', () => {
-                        remoteVideo.play().catch(err => console.error('Still cannot play:', err));
-                    }, { once: true });
-                });
+
+                // Ensure audio is playing - try multiple times
+                const tryPlay = () => {
+                    remoteVideo.play().catch(e => {
+                        console.error('Error playing remote video:', e);
+                        // Try again after a short delay
+                        setTimeout(tryPlay, 1000);
+                    });
+                };
+                tryPlay();
+
+                // Also try on user interaction as fallback
+                document.addEventListener('click', () => {
+                    remoteVideo.play().catch(err => console.error('Still cannot play:', err));
+                }, { once: true });
             }
         }
         
@@ -1742,7 +1747,8 @@ function createPeerConnection(remoteSocketId, isInitiator) {
                 
                 // Add double-click for fullscreen
                 element.addEventListener('dblclick', function(e) {
-                    if (!e.target.closest('.video-size-controls')) {
+                    // Allow double-click on video element itself
+                    if (e.target.tagName === 'VIDEO' || e.target === element) {
                         toggleVideoFullscreen(element);
                     }
                 });
@@ -1776,9 +1782,22 @@ function createPeerConnection(remoteSocketId, isInitiator) {
         
         // Toggle video fullscreen
         function toggleVideoFullscreen(element) {
-            element.classList.toggle('maximized');
-            if (element.classList.contains('maximized')) {
-                element.classList.remove('minimized');
+            const video = element.querySelector('video');
+            if (video && video.requestFullscreen) {
+                video.requestFullscreen().catch(e => {
+                    console.error('Error requesting fullscreen:', e);
+                    // Fallback to CSS-based fullscreen
+                    element.classList.toggle('maximized');
+                    if (element.classList.contains('maximized')) {
+                        element.classList.remove('minimized');
+                    }
+                });
+            } else {
+                // Fallback for browsers without fullscreen API
+                element.classList.toggle('maximized');
+                if (element.classList.contains('maximized')) {
+                    element.classList.remove('minimized');
+                }
             }
         }
         
@@ -1857,7 +1876,10 @@ function createPeerConnection(remoteSocketId, isInitiator) {
 
     // Create offer if initiator with modern constraints
     if (isInitiator) {
-        pc.createOffer()
+        pc.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true
+        })
         .then(offer => {
             console.log('Created offer with SDP:', offer.sdp.substring(0, 200));
             return pc.setLocalDescription(offer);
@@ -1957,7 +1979,8 @@ function makeResizable(element) {
     
     // Add double-click for fullscreen
     element.addEventListener('dblclick', function(e) {
-        if (!e.target.closest('.video-size-controls')) {
+        // Allow double-click on video element itself
+        if (e.target.tagName === 'VIDEO' || e.target === element) {
             toggleVideoFullscreen(element);
         }
     });

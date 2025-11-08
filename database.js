@@ -475,6 +475,56 @@ const serverDB = {
                 else resolve(rows);
             });
         });
+    },
+
+    getChannels: (serverId) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'SELECT * FROM channels WHERE server_id = ? ORDER BY created_at ASC';
+            db.all(sql, [serverId], (err, rows) => {
+                if (err) reject(err);
+                else resolve(rows);
+            });
+        });
+    },
+
+    createChannel: (name, type, serverId) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'INSERT INTO channels (name, type, server_id) VALUES (?, ?, ?)';
+            db.run(sql, [name, type, serverId], function(err) {
+                if (err) reject(err);
+                else resolve({ id: this.lastID, name, type, serverId });
+            });
+        });
+    },
+
+    getById: (serverId) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'SELECT * FROM servers WHERE id = ?';
+            db.get(sql, [serverId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
+    },
+
+    isUserMember: (serverId, userId) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'SELECT 1 FROM server_members WHERE server_id = ? AND user_id = ?';
+            db.get(sql, [serverId, userId], (err, row) => {
+                if (err) reject(err);
+                else resolve(!!row);
+            });
+        });
+    },
+
+    getChannelById: (channelId) => {
+        return new Promise((resolve, reject) => {
+            const sql = 'SELECT * FROM channels WHERE id = ?';
+            db.get(sql, [channelId], (err, row) => {
+                if (err) reject(err);
+                else resolve(row);
+            });
+        });
     }
 };
 

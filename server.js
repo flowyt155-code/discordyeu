@@ -227,6 +227,27 @@ app.get('/api/messages/:channelId', authenticateToken, async (req, res) => {
     }
 });
 
+// Get channel by ID
+app.get('/api/channels/:channelId', authenticateToken, async (req, res) => {
+    try {
+        const channel = await serverDB.getChannelById(req.params.channelId);
+        if (!channel) {
+            return res.status(404).json({ error: 'Channel not found' });
+        }
+
+        // Check if user is a member of the server that owns this channel
+        const isMember = await serverDB.isUserMember(channel.server_id, req.user.id);
+        if (!isMember) {
+            return res.status(403).json({ error: 'Not authorized to access this channel' });
+        }
+
+        res.json(channel);
+    } catch (error) {
+        console.error('Get channel error:', error);
+        res.status(500).json({ error: 'Failed to get channel' });
+    }
+});
+
 // Get direct messages
 app.get('/api/dm/:userId', authenticateToken, async (req, res) => {
     try {
@@ -271,6 +292,50 @@ app.get('/api/servers/:serverId/members', authenticateToken, async (req, res) =>
         res.json(members);
     } catch (error) {
         res.status(500).json({ error: 'Failed to get server members' });
+    }
+});
+
+// Get channels for a server
+app.get('/api/servers/:serverId/channels', authenticateToken, async (req, res) => {
+    try {
+        // Check if user is a member of the server
+        const isMember = await serverDB.isUserMember(req.params.serverId, req.user.id);
+        if (!isMember) {
+            return res.status(403).json({ error: 'Not a member of this server' });
+        }
+
+        const channels = await serverDB.getChannels(req.params.serverId);
+        res.json(channels);
+    } catch (error) {
+        console.error('Get channels error:', error);
+        res.status(500).json({ error: 'Failed to get channels' });
+    }
+});
+
+// Create a channel in a server
+app.post('/api/servers/:serverId/channels', authenticateToken, async (req, res) => {
+    try {
+        const { name, type } = req.body;
+
+        // Check if user is the owner of the server
+        const server = await serverDB.getById(req.params.serverId);
+        if (!server || server.owner_id !== req.user.id) {
+            return res.status(403).json({ error: 'Only server owner can create channels' });
+        }
+
+        if (!name || name.trim().length < 1) {
+            return res.status(400).json({ error: 'Channel name is required' });
+        }
+
+        if (!['text', 'voice'].includes(type)) {
+            return res.status(400).json({ error: 'Channel type must be text or voice' });
+        }
+
+        const channel = await serverDB.createChannel(name.trim(), type, req.params.serverId);
+        res.json(channel);
+    } catch (error) {
+        console.error('Create channel error:', error);
+        res.status(500).json({ error: 'Failed to create channel' });
     }
 });
 
@@ -388,17 +453,17 @@ io.on('connection', async (socket) => {
     socket.on('send-message', async (messageData) => {
         try {
             const { channelId, message } = messageData;
-            
+
             // Get user info
             const user = await userDB.findById(socket.userId);
-            
+
             // Save to database
             const savedMessage = await messageDB.create(
                 message.text,
                 socket.userId,
                 channelId
             );
-            
+
             // Broadcast message with full user info
             const broadcastMessage = {
                 id: savedMessage.id,
@@ -407,7 +472,7 @@ io.on('connection', async (socket) => {
                 text: message.text,
                 timestamp: new Date() // Client will format this
             };
-            
+
             io.emit('new-message', {
                 channelId,
                 message: broadcastMessage
