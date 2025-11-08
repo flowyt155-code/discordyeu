@@ -1274,6 +1274,12 @@ body {
     border-radius: 4px;
     transition: background-color 0.2s;
     margin-top: 8px;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.message-group:hover .add-reaction-btn {
+    opacity: 1;
 }
 
 .add-reaction-btn:hover {

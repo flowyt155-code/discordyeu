@@ -944,7 +944,7 @@ function addMessageToUI(message) {
     
     const addReactionBtn = document.createElement('button');
     addReactionBtn.className = 'add-reaction-btn';
-    addReactionBtn.textContent = '😊';
+    addReactionBtn.textContent = '➕';
     addReactionBtn.title = 'Add reaction';
     addReactionBtn.onclick = () => showEmojiPickerForMessage(message.id || Date.now());
     
@@ -997,6 +997,8 @@ function showEmojiPickerForMessage(messageId) {
     const emojis = ['👍', '❤️', '😂', '😮', '😢', '🎉'];
     const picker = createEmojiPicker(emojis, (emoji) => {
         addReaction(messageId, emoji);
+        // Close the picker after selecting emoji
+        picker.remove();
     });
     document.body.appendChild(picker);
 }
