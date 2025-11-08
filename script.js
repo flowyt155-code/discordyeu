@@ -1582,9 +1582,21 @@ function createPeerConnection(remoteSocketId, isInitiator) {
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
             { urls: 'stun:stun3.l.google.com:19302' },
-            { urls: 'stun:stun4.l.google.com:19302' }
+            { urls: 'stun:stun4.l.google.com:19302' },
+            // TURN servers for production
+            {
+                urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
+                credential: 'webrtc',
+                username: 'webrtc'
+            },
+            {
+                urls: 'turn:openrelay.metered.ca:80',
+                username: 'openrelayproject',
+                credential: 'openrelayproject'
+            }
         ],
-        iceCandidatePoolSize: 10
+        iceCandidatePoolSize: 10,
+        iceTransportPolicy: 'all'
     });
 
     peerConnections[remoteSocketId] = pc;
@@ -1622,16 +1634,34 @@ function createPeerConnection(remoteSocketId, isInitiator) {
         }
     };
 
-    // Handle connection state changes
+    // Handle connection state changes with better error handling
     pc.oniceconnectionstatechange = () => {
         console.log(`ICE connection state: ${pc.iceConnectionState}`);
         if (pc.iceConnectionState === 'failed') {
-            console.error('ICE connection failed');
+            console.error('ICE connection failed, attempting restart');
             // Try to restart ICE
             pc.restartIce();
-        }
-        if (pc.iceConnectionState === 'connected') {
+        } else if (pc.iceConnectionState === 'connected') {
             console.log('Peer connection established successfully!');
+        } else if (pc.iceConnectionState === 'disconnected') {
+            console.warn('Peer connection disconnected, attempting to reconnect');
+            // Try to restart ICE for reconnection
+            setTimeout(() => {
+                if (pc.iceConnectionState === 'disconnected') {
+                    pc.restartIce();
+                }
+            }, 2000);
+        }
+    };
+
+    // Handle connection state
+    pc.onconnectionstatechange = () => {
+        console.log(`Connection state: ${pc.connectionState}`);
+        if (pc.connectionState === 'failed') {
+            console.error('Connection failed, cleaning up');
+            // Clean up failed connection
+            pc.close();
+            delete peerConnections[remoteSocketId];
         }
     };
 
@@ -1874,26 +1904,48 @@ function createPeerConnection(remoteSocketId, isInitiator) {
         }, 100);
     };
 
-    // Create offer if initiator with modern constraints
+    // Create offer if initiator with modern constraints and better error handling
     if (isInitiator) {
-        pc.createOffer({
-            offerToReceiveAudio: true,
-            offerToReceiveVideo: true
-        })
-        .then(offer => {
-            console.log('Created offer with SDP:', offer.sdp.substring(0, 200));
-            return pc.setLocalDescription(offer);
-        })
-        .then(() => {
-            console.log('Sending offer to:', remoteSocketId);
-            socket.emit('offer', {
-                to: remoteSocketId,
-                offer: pc.localDescription
-            });
-        })
-        .catch(error => {
-            console.error('Error creating offer:', error);
-        });
+        // Wait a bit for tracks to be added before creating offer
+        setTimeout(() => {
+            if (pc.signalingState === 'stable') {
+                pc.createOffer({
+                    offerToReceiveAudio: true,
+                    offerToReceiveVideo: true
+                })
+                .then(offer => {
+                    console.log('Created offer with SDP:', offer.sdp.substring(0, 200));
+                    return pc.setLocalDescription(offer);
+                })
+                .then(() => {
+                    console.log('Sending offer to:', remoteSocketId);
+                    socket.emit('offer', {
+                        to: remoteSocketId,
+                        offer: pc.localDescription
+                    });
+                })
+                .catch(error => {
+                    console.error('Error creating offer:', error);
+                    // Retry after a delay
+                    setTimeout(() => {
+                        if (isInitiator && pc.signalingState === 'stable' && !pc.localDescription) {
+                            pc.createOffer({
+                                offerToReceiveAudio: true,
+                                offerToReceiveVideo: true
+                            })
+                            .then(offer => pc.setLocalDescription(offer))
+                            .then(() => {
+                                socket.emit('offer', {
+                                    to: remoteSocketId,
+                                    offer: pc.localDescription
+                                });
+                            })
+                            .catch(retryError => console.error('Retry offer failed:', retryError));
+                        }
+                    }, 3000);
+                });
+            }
+        }, 500);
     }
     
     return pc;
