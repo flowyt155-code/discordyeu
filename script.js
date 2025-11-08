@@ -64,6 +64,12 @@ function showNotification(title, body) {
     }
 }
 
+function playMessageSound() {
+    const messageSound = new Audio('/assets/pleasant-unobtrusive-sound-signal-of-an-incoming-message.mp3');
+    messageSound.volume = 0.3; // Set volume to 30% to not be too loud
+    messageSound.play().catch(e => console.error('Error playing message sound:', e));
+}
+
 function updateUserInfo() {
     const userAvatar = document.querySelector('.user-avatar');
     const username = document.querySelector('.username');
@@ -97,6 +103,9 @@ function connectToSocketIO() {
                 addMessageToUI(data.message);
                 scrollToBottom();
             }
+
+            // Play notification sound for all new messages (not just when user is in chat)
+            playMessageSound();
 
             if (document.hidden) {
                 showNotification('New Message', `${data.message.author}: ${data.message.text}`);
@@ -185,6 +194,9 @@ function getChannelNameById(id) {
                 });
                 scrollToBottom();
             }
+
+            // Play notification sound for all new DMs (not just when user is in chat)
+            playMessageSound();
         });
 
         socket.on('dm-sent', (data) => {
