@@ -80,12 +80,20 @@ function updateUserInfo() {
 
 function connectToSocketIO() {
     if (typeof io !== 'undefined') {
-        socket = io({ auth: { token: token } });
-        
+        // Use environment-based URL for production
+        const serverUrl = window.location.hostname === 'localhost' ? '/' : window.location.origin;
+        socket = io(serverUrl, {
+            auth: { token: token },
+            transports: ['websocket', 'polling'],
+            upgrade: true,
+            rememberUpgrade: true,
+            timeout: 20000
+        });
+
         socket.on('connect', () => {
             console.log('Connected to server');
         });
-        
+
        socket.on('connect_error', (error) => {
             console.error('Connection error:', error);
         });
@@ -148,27 +156,52 @@ function getChannelNameById(id) {
         });
 
         socket.on('offer', async (data) => {
-            if (!peerConnections[data.from]) {
-                createPeerConnection(data.from, false);
+            console.log('Received offer from:', data.from);
+            try {
+                if (!peerConnections[data.from]) {
+                    createPeerConnection(data.from, false);
+                }
+                const pc = peerConnections[data.from];
+                if (pc) {
+                    await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+                    console.log('Remote description set, creating answer');
+                    const answer = await pc.createAnswer();
+                    await pc.setLocalDescription(answer);
+                    console.log('Local description set, sending answer');
+                    socket.emit('answer', { to: data.from, answer: answer });
+                }
+            } catch (error) {
+                console.error('Error handling offer:', error);
             }
-            const pc = peerConnections[data.from];
-            await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-            const answer = await pc.createAnswer();
-            await pc.setLocalDescription(answer);
-            socket.emit('answer', { to: data.from, answer: answer });
         });
 
         socket.on('answer', async (data) => {
-            const pc = peerConnections[data.from];
-            if (pc) {
-                await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+            console.log('Received answer from:', data.from);
+            try {
+                const pc = peerConnections[data.from];
+                if (pc) {
+                    await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    console.log('Remote answer set successfully');
+                } else {
+                    console.error('No peer connection found for answer');
+                }
+            } catch (error) {
+                console.error('Error handling answer:', error);
             }
         });
 
         socket.on('ice-candidate', async (data) => {
-            const pc = peerConnections[data.from];
-            if (pc && data.candidate) {
-                await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            try {
+                const pc = peerConnections[data.from];
+                if (pc && data.candidate) {
+                    console.log('Adding ICE candidate from:', data.from);
+                    await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    console.log('ICE candidate added successfully');
+                } else {
+                    console.warn('No peer connection or candidate data');
+                }
+            } catch (error) {
+                console.error('Error adding ICE candidate:', error);
             }
         });
         
@@ -220,6 +253,26 @@ function getChannelNameById(id) {
         socket.on('incoming-call', (data) => {
             const { from, type } = data;
             if (from) {
+                // Check if we already have a call in progress
+                if (inCall) {
+                    console.log('Incoming call received but already in a call, rejecting');
+                    rejectCall(from);
+                    return;
+                }
+
+                // Check if this is a duplicate call request (same caller, same type, within short time)
+                const now = Date.now();
+                const recentCallKey = `${from.id}-${type}`;
+                if (window.recentCalls && window.recentCalls[recentCallKey] && (now - window.recentCalls[recentCallKey]) < 10000) {
+                    console.log('Duplicate call request detected, ignoring');
+                    rejectCall(from);
+                    return;
+                }
+
+                // Track recent calls
+                if (!window.recentCalls) window.recentCalls = {};
+                window.recentCalls[recentCallKey] = now;
+
                 showIncomingCall(from, type);
             }
         });
@@ -231,7 +284,10 @@ function getChannelNameById(id) {
 
             // Create peer connection as initiator
             if (!peerConnections[data.from.socketId]) {
+                console.log('Creating peer connection as initiator');
                 createPeerConnection(data.from.socketId, true);
+            } else {
+                console.log('Peer connection already exists');
             }
 
             // Ensure local stream is playing
@@ -240,9 +296,19 @@ function getChannelNameById(id) {
                 localVideo.srcObject = localStream;
                 localVideo.play().catch(e => console.error('Error playing local video:', e));
             }
+
+            // Update call details for proper cleanup
+            window.currentCallDetails = {
+                friendId: data.from.id,
+                type: window.currentCallDetails?.type || 'video',
+                isInitiator: true,
+                peerId: data.from.socketId,
+                callId: window.currentCallDetails?.callId || Date.now()
+            };
         });
 
         socket.on('call-rejected', (data) => {
+            console.log('Call rejected by recipient');
             alert('Call was declined');
             // Close call interface
             const callInterface = document.getElementById('callInterface');
@@ -252,9 +318,12 @@ function getChannelNameById(id) {
                 localStream = null;
             }
             inCall = false;
+            // Clear call details
+            window.currentCallDetails = null;
         });
         
         socket.on('call-ended', (data) => {
+            console.log('Call ended by other party');
             // Handle when other party ends the call
             if (peerConnections[data.from]) {
                 peerConnections[data.from].close();
@@ -262,11 +331,13 @@ function getChannelNameById(id) {
             }
             const remoteVideo = document.getElementById(`remote-${data.from}`);
             if (remoteVideo) remoteVideo.remove();
-            
+
             // If no more connections, end the call
             if (Object.keys(peerConnections).length === 0) {
                 leaveVoiceChannel(true);
             }
+            // Clear call details
+            window.currentCallDetails = null;
         });
     }
 }
@@ -555,65 +626,101 @@ window.removeFriend = async function(friendId) {
 // Initiate call function
 async function initiateCall(friendId, type) {
     try {
+        // Check if already in a call
+        if (inCall) {
+            console.log('Already in a call, ignoring new call request');
+            return;
+        }
+
+        // Check for duplicate call attempts (increased timeout)
+        const now = Date.now();
+        const callKey = `${friendId}-${type}`;
+        if (window.recentOutgoingCalls && window.recentOutgoingCalls[callKey] && (now - window.recentOutgoingCalls[callKey]) < 10000) {
+            console.log('Duplicate outgoing call detected, ignoring');
+            return;
+        }
+
+        // Track recent outgoing calls
+        if (!window.recentOutgoingCalls) window.recentOutgoingCalls = {};
+        window.recentOutgoingCalls[callKey] = now;
+
+        console.log('Initiating call to friend:', friendId, 'type:', type);
+
         // Always request both video and audio, but disable video if it's audio call
         const constraints = { video: true, audio: true };
-        
+
         localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        
+
         // If audio call, disable video track initially
         if (type === 'audio') {
             localStream.getVideoTracks().forEach(track => {
                 track.enabled = false;
             });
         }
-        
+
         // Show call interface
         const callInterface = document.getElementById('callInterface');
         callInterface.classList.remove('hidden');
-        
+
         // Update call header
         document.querySelector('.call-channel-name').textContent = `Calling...`;
-        
+
         // Set local video
         const localVideo = document.getElementById('localVideo');
         localVideo.srcObject = localStream;
-        
+
         // Store call details
         window.currentCallDetails = {
             friendId: friendId,
             type: type,
             isInitiator: true,
-            originalType: type
+            originalType: type,
+            callId: Date.now() // Add unique call ID to prevent duplicates
         };
-        
-        // Emit call request via socket
-        if (socket && socket.connected) {
-            socket.emit('initiate-call', {
-                to: friendId,
-                type: type,
-                from: {
-                    id: currentUser.id,
-                    username: currentUser.username,
-                    socketId: socket.id
-                }
-            });
-        }
-        
+
+        // Emit call request via socket with a small delay to prevent rapid firing
+        setTimeout(() => {
+            if (socket && socket.connected && inCall) {
+                console.log('Sending call initiation to server');
+                socket.emit('initiate-call', {
+                    to: friendId,
+                    type: type,
+                    from: {
+                        id: currentUser.id,
+                        username: currentUser.username,
+                        socketId: socket.id
+                    }
+                });
+            } else if (!socket || !socket.connected) {
+                console.error('Socket not connected');
+                alert('Connection lost. Please refresh the page.');
+                leaveVoiceChannel(true);
+            } else if (!inCall) {
+                console.log('Call was cancelled before sending request');
+            }
+        }, 1000); // Increased delay
+
         inCall = true;
         isVideoEnabled = type === 'video';
         isAudioEnabled = true;
         updateCallButtons();
-        
+
         // Initialize resizable functionality after a short delay
         setTimeout(() => {
             if (typeof initializeResizableVideos === 'function') {
                 initializeResizableVideos();
             }
         }, 100);
-        
+
     } catch (error) {
         console.error('Error initiating call:', error);
         alert('Failed to access camera/microphone. Please check permissions.');
+        // Clean up on error
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+            localStream = null;
+        }
+        inCall = false;
     }
 }
 
@@ -665,35 +772,46 @@ function showIncomingCall(caller, type) {
 // Accept incoming call
 async function acceptCall(caller, type) {
     try {
+        // Check if already in a call
+        if (inCall) {
+            console.log('Already in a call, rejecting incoming call');
+            rejectCall(caller);
+            return;
+        }
+
+        console.log('Accepting call from:', caller.username, 'type:', type);
+
         // Always request both video and audio
         const constraints = { video: true, audio: true };
-        
+
         localStream = await navigator.mediaDevices.getUserMedia(constraints);
-        
+
         // If audio call, disable video track initially
         if (type === 'audio') {
             localStream.getVideoTracks().forEach(track => {
                 track.enabled = false;
             });
         }
-        
+
         // Show call interface
         const callInterface = document.getElementById('callInterface');
         callInterface.classList.remove('hidden');
-        
+
         document.querySelector('.call-channel-name').textContent = `Call with ${caller.username}`;
-        
+
         const localVideo = document.getElementById('localVideo');
         localVideo.srcObject = localStream;
-        
+
         // Store call details
         window.currentCallDetails = {
+            friendId: caller.id,
             peerId: caller.socketId,
             type: type,
             isInitiator: false,
-            originalType: type
+            originalType: type,
+            callId: Date.now() // Add unique call ID
         };
-        
+
         if (socket && socket.connected) {
             socket.emit('accept-call', {
                 to: caller.socketId,
@@ -703,28 +821,39 @@ async function acceptCall(caller, type) {
                     socketId: socket.id
                 }
             });
+        } else {
+            console.error('Socket not connected');
+            alert('Connection lost. Please refresh the page.');
+            return;
         }
-        
+
         inCall = true;
         isVideoEnabled = type === 'video';
         isAudioEnabled = true;
         updateCallButtons();
-        
+
         // Create peer connection as receiver (not initiator)
         if (!peerConnections[caller.socketId]) {
             createPeerConnection(caller.socketId, false);
         }
-        
+
         // Initialize resizable functionality after a short delay
         setTimeout(() => {
             if (typeof initializeResizableVideos === 'function') {
                 initializeResizableVideos();
             }
         }, 100);
-        
+
     } catch (error) {
         console.error('Error accepting call:', error);
         alert('Failed to access camera/microphone. Please check permissions.');
+        // Clean up on error
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+            localStream = null;
+        }
+        inCall = false;
+        rejectCall(caller);
     }
 }
 
@@ -1278,6 +1407,8 @@ async function initializeMedia() {
 function leaveVoiceChannel(force = false) {
     if (!inCall) return;
 
+    console.log('Leaving voice channel, force:', force);
+
     if (force) {
         inCall = false;
 
@@ -1290,7 +1421,7 @@ function leaveVoiceChannel(force = false) {
             screenStream.getTracks().forEach(track => track.stop());
             screenStream = null;
         }
-        
+
         if (socket && socket.connected) {
             socket.emit('leave-voice-channel', currentChannel);
         }
@@ -1300,6 +1431,11 @@ function leaveVoiceChannel(force = false) {
 
         document.querySelectorAll('.voice-channel').forEach(ch => ch.classList.remove('in-call'));
         document.getElementById('remoteParticipants').innerHTML = '';
+
+        // Clear call details and recent call tracking
+        window.currentCallDetails = null;
+        window.recentCalls = {};
+        window.recentOutgoingCalls = {};
     }
 
     const callInterface = document.getElementById('callInterface');
@@ -1321,6 +1457,7 @@ function initializeCallControls() {
     const toggleScreenBtn = document.getElementById('toggleScreenBtn');
     
     closeCallBtn.addEventListener('click', () => {
+        console.log('User clicked close call button');
         // End call for both voice channels and direct calls
         if (window.currentCallDetails) {
             // End a direct call
@@ -1592,14 +1729,22 @@ function createPeerConnection(remoteSocketId, isInitiator) {
 
     const pc = new RTCPeerConnection({
         iceServers: [
+            // Primary STUN servers - reliable for most networks
             { urls: 'stun:stun.l.google.com:19302' },
             { urls: 'stun:stun1.l.google.com:19302' },
             { urls: 'stun:stun2.l.google.com:19302' },
             { urls: 'stun:stun3.l.google.com:19302' },
             { urls: 'stun:stun4.l.google.com:19302' },
-            // TURN servers for production
+            // Additional STUN servers for better connectivity
+            { urls: 'stun:stun.stunprotocol.org:3478' },
+            { urls: 'stun:stun.nextcloud.com:443' },
+            { urls: 'stun:stun.cloudflare.com:3478' },
+            // TURN servers for production/cloud deployments
             {
-                urls: 'turn:turn.anyfirewall.com:443?transport=tcp',
+                urls: [
+                    'turn:turn.bistri.com:80',
+                    'turn:turn.anyfirewall.com:443?transport=tcp'
+                ],
                 credential: 'webrtc',
                 username: 'webrtc'
             },
@@ -1607,10 +1752,23 @@ function createPeerConnection(remoteSocketId, isInitiator) {
                 urls: 'turn:openrelay.metered.ca:80',
                 username: 'openrelayproject',
                 credential: 'openrelayproject'
+            },
+            {
+                urls: 'turn:turn.twilio.com:443?transport=tcp',
+                username: 'SKXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX',
+                credential: 'your_twilio_credential'
+            },
+            // Backup TURN servers
+            {
+                urls: 'turn:numb.viagenie.ca',
+                credential: 'muazkh',
+                username: 'webrtc@live.com'
             }
         ],
         iceCandidatePoolSize: 10,
-        iceTransportPolicy: 'all'
+        iceTransportPolicy: 'all',
+        bundlePolicy: 'max-bundle',
+        rtcpMuxPolicy: 'require'
     });
 
     peerConnections[remoteSocketId] = pc;
@@ -1624,28 +1782,58 @@ function createPeerConnection(remoteSocketId, isInitiator) {
 
         // Add audio tracks first (priority for voice calls)
         audioTracks.forEach(track => {
-            console.log(`Adding audio track: ${track.label}, enabled: ${track.enabled}`);
-            pc.addTrack(track, localStream);
+            if (track.readyState === 'live') {
+                console.log(`Adding audio track: ${track.label}, enabled: ${track.enabled}`);
+                try {
+                    pc.addTrack(track, localStream);
+                    console.log('Audio track added successfully');
+                } catch (error) {
+                    console.error('Error adding audio track:', error);
+                }
+            } else {
+                console.warn(`Audio track not live: ${track.label}, state: ${track.readyState}`);
+            }
         });
 
         // Then add video tracks
         videoTracks.forEach(track => {
-            console.log(`Adding video track: ${track.label}, enabled: ${track.enabled}`);
-            pc.addTrack(track, localStream);
+            if (track.readyState === 'live') {
+                console.log(`Adding video track: ${track.label}, enabled: ${track.enabled}`);
+                try {
+                    pc.addTrack(track, localStream);
+                    console.log('Video track added successfully');
+                } catch (error) {
+                    console.error('Error adding video track:', error);
+                }
+            } else {
+                console.warn(`Video track not live: ${track.label}, state: ${track.readyState}`);
+            }
         });
     } else {
-        console.error('No local stream available');
+        console.error('No local stream available when creating peer connection');
     }
 
     // Handle ICE candidates
     pc.onicecandidate = (event) => {
         if (event.candidate) {
-            console.log('Sending ICE candidate');
+            console.log('Sending ICE candidate:', event.candidate.type, event.candidate.protocol, 'address:', event.candidate.address);
             socket.emit('ice-candidate', {
                 to: remoteSocketId,
                 candidate: event.candidate
             });
+        } else {
+            console.log('ICE candidate gathering complete');
         }
+    };
+
+    // Handle ICE candidate errors
+    pc.onicecandidateerror = (event) => {
+        console.error('ICE candidate error:', event);
+    };
+
+    // Handle ICE gathering state changes
+    pc.onicegatheringstatechange = () => {
+        console.log('ICE gathering state:', pc.iceGatheringState);
     };
 
     // Handle connection state changes with better error handling
@@ -1653,18 +1841,29 @@ function createPeerConnection(remoteSocketId, isInitiator) {
         console.log(`ICE connection state: ${pc.iceConnectionState}`);
         if (pc.iceConnectionState === 'failed') {
             console.error('ICE connection failed, attempting restart');
-            // Try to restart ICE
-            pc.restartIce();
+            // Try to restart ICE with new offer
+            setTimeout(() => {
+                if (pc.signalingState !== 'closed') {
+                    pc.restartIce();
+                }
+            }, 1000);
         } else if (pc.iceConnectionState === 'connected') {
             console.log('Peer connection established successfully!');
         } else if (pc.iceConnectionState === 'disconnected') {
             console.warn('Peer connection disconnected, attempting to reconnect');
             // Try to restart ICE for reconnection
             setTimeout(() => {
-                if (pc.iceConnectionState === 'disconnected') {
+                if (pc.iceConnectionState === 'disconnected' && pc.signalingState !== 'closed') {
                     pc.restartIce();
                 }
             }, 2000);
+        } else if (pc.iceConnectionState === 'closed') {
+            console.log('Peer connection closed');
+            delete peerConnections[remoteSocketId];
+        } else if (pc.iceConnectionState === 'checking') {
+            console.log('ICE checking in progress...');
+        } else if (pc.iceConnectionState === 'completed') {
+            console.log('ICE checking completed successfully');
         }
     };
 
@@ -1676,12 +1875,27 @@ function createPeerConnection(remoteSocketId, isInitiator) {
             // Clean up failed connection
             pc.close();
             delete peerConnections[remoteSocketId];
+        } else if (pc.connectionState === 'connected') {
+            console.log('WebRTC connection fully established');
+        } else if (pc.connectionState === 'closed') {
+            console.log('WebRTC connection closed');
+            delete peerConnections[remoteSocketId];
+        } else if (pc.connectionState === 'connecting') {
+            console.log('WebRTC connection establishing...');
+        } else if (pc.connectionState === 'disconnected') {
+            console.warn('WebRTC connection disconnected');
         }
+    };
+
+    // Handle signaling state changes
+    pc.onsignalingstatechange = () => {
+        console.log(`Signaling state: ${pc.signalingState}`);
+        // Note: We override this later for offer creation, but keep basic logging
     };
 
     // Handle incoming remote stream
     pc.ontrack = (event) => {
-        console.log('Received remote track:', event.track.kind, 'Stream ID:', event.streams[0]?.id);
+        console.log('Received remote track:', event.track.kind, 'Stream ID:', event.streams[0]?.id, 'Enabled:', event.track.enabled);
 
         const remoteParticipants = document.getElementById('remoteParticipants');
 
@@ -1707,6 +1921,10 @@ function createPeerConnection(remoteSocketId, isInitiator) {
             participantDiv.appendChild(remoteVideo);
             participantDiv.appendChild(participantName);
             remoteParticipants.appendChild(participantDiv);
+
+            console.log('Created new participant video element');
+        } else {
+            console.log('Participant video element already exists');
         }
         
         // Set the stream to the video element
@@ -1715,22 +1933,37 @@ function createPeerConnection(remoteSocketId, isInitiator) {
             remoteVideo = document.getElementById(`remote-${remoteSocketId}`);
             if (remoteVideo) {
                 remoteVideo.srcObject = event.streams[0];
+                console.log('Remote stream set, attempting to play');
 
-                // Ensure audio is playing - try multiple times
-                const tryPlay = () => {
-                    remoteVideo.play().catch(e => {
+                // Ensure audio is playing - try multiple times with better error handling
+                const tryPlay = async () => {
+                    try {
+                        await remoteVideo.play();
+                        console.log('Remote video playing successfully');
+                    } catch (e) {
                         console.error('Error playing remote video:', e);
-                        // Try again after a short delay
-                        setTimeout(tryPlay, 1000);
-                    });
+                        // Try again after a short delay, but limit retries
+                        if (e.name !== 'NotAllowedError') {
+                            setTimeout(tryPlay, 1000);
+                        }
+                    }
                 };
                 tryPlay();
 
-                // Also try on user interaction as fallback
-                document.addEventListener('click', () => {
-                    remoteVideo.play().catch(err => console.error('Still cannot play:', err));
-                }, { once: true });
+                // Also try on user interaction as fallback for autoplay restrictions
+                const playOnInteraction = () => {
+                    remoteVideo.play().catch(err => {
+                        if (err.name !== 'NotAllowedError') {
+                            console.error('Still cannot play after interaction:', err);
+                        }
+                    });
+                };
+
+                document.addEventListener('click', playOnInteraction, { once: true });
+                document.addEventListener('touchstart', playOnInteraction, { once: true });
             }
+        } else {
+            console.warn('No streams in track event');
         }
         
         // Initialize resizable videos
@@ -1923,16 +2156,18 @@ function createPeerConnection(remoteSocketId, isInitiator) {
         // Wait a bit for tracks to be added before creating offer
         setTimeout(() => {
             if (pc.signalingState === 'stable') {
+                console.log('Creating WebRTC offer...');
                 pc.createOffer({
                     offerToReceiveAudio: true,
-                    offerToReceiveVideo: true
+                    offerToReceiveVideo: true,
+                    iceRestart: false
                 })
                 .then(offer => {
-                    console.log('Created offer with SDP:', offer.sdp.substring(0, 200));
+                    console.log('Created offer, setting local description');
                     return pc.setLocalDescription(offer);
                 })
                 .then(() => {
-                    console.log('Sending offer to:', remoteSocketId);
+                    console.log('Local description set, sending offer to:', remoteSocketId);
                     socket.emit('offer', {
                         to: remoteSocketId,
                         offer: pc.localDescription
@@ -1940,12 +2175,14 @@ function createPeerConnection(remoteSocketId, isInitiator) {
                 })
                 .catch(error => {
                     console.error('Error creating offer:', error);
-                    // Retry after a delay
+                    // Retry after a delay with ice restart
                     setTimeout(() => {
                         if (isInitiator && pc.signalingState === 'stable' && !pc.localDescription) {
+                            console.log('Retrying offer creation...');
                             pc.createOffer({
                                 offerToReceiveAudio: true,
-                                offerToReceiveVideo: true
+                                offerToReceiveVideo: true,
+                                iceRestart: true
                             })
                             .then(offer => pc.setLocalDescription(offer))
                             .then(() => {
@@ -1958,8 +2195,34 @@ function createPeerConnection(remoteSocketId, isInitiator) {
                         }
                     }, 3000);
                 });
+            } else {
+                console.log('Signaling state not stable, current state:', pc.signalingState);
+                // Set up a one-time handler for when signaling state becomes stable
+                const originalHandler = pc.onsignalingstatechange;
+                pc.onsignalingstatechange = () => {
+                    console.log(`Signaling state changed to: ${pc.signalingState}`);
+                    if (originalHandler) originalHandler();
+                    if (pc.signalingState === 'stable' && isInitiator && !pc.localDescription) {
+                        console.log('Signaling state now stable, creating offer...');
+                        pc.createOffer({
+                            offerToReceiveAudio: true,
+                            offerToReceiveVideo: true,
+                            iceRestart: false
+                        })
+                        .then(offer => pc.setLocalDescription(offer))
+                        .then(() => {
+                            socket.emit('offer', {
+                                to: remoteSocketId,
+                                offer: pc.localDescription
+                            });
+                        })
+                        .catch(error => console.error('Error creating offer on signaling state change:', error));
+                        // Reset to original handler
+                        pc.onsignalingstatechange = originalHandler;
+                    }
+                };
             }
-        }, 500);
+        }, 1500); // Increased delay to ensure tracks are ready
     }
     
     return pc;
