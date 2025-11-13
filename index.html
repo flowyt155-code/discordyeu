@@ -210,6 +210,134 @@
         </div>
     </div>
 
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button class="modal-close" id="closeSettingsBtn">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="settings-tabs">
+                    <button class="settings-tab active" data-tab="audio">Audio</button>
+                    <button class="settings-tab" data-tab="video">Video</button>
+                    <button class="settings-tab" data-tab="general">General</button>
+                </div>
+                <div class="settings-content">
+                    <!-- Audio Settings -->
+                    <div id="audioSettings" class="settings-panel active">
+                        <h3>Microphone</h3>
+                        <div class="setting-group">
+                            <label for="microphoneSelect">Input Device:</label>
+                            <select id="microphoneSelect" class="device-select"></select>
+                        </div>
+                        <div class="setting-group">
+                            <label for="micVolume">Microphone Volume:</label>
+                            <input type="range" id="micVolume" min="0" max="100" value="75" class="volume-slider">
+                            <span id="micVolumeValue">75%</span>
+                        </div>
+                        <div class="setting-group">
+                            <label for="micSensitivity">Sensitivity:</label>
+                            <input type="range" id="micSensitivity" min="0" max="100" value="50" class="volume-slider">
+                            <span id="micSensitivityValue">50%</span>
+                        </div>
+
+                        <h3>Speakers/Headphones</h3>
+                        <div class="setting-group">
+                            <label for="speakerSelect">Output Device:</label>
+                            <select id="speakerSelect" class="device-select"></select>
+                        </div>
+                        <div class="setting-group">
+                            <label for="speakerVolume">Speaker Volume:</label>
+                            <input type="range" id="speakerVolume" min="0" max="100" value="80" class="volume-slider">
+                            <span id="speakerVolumeValue">80%</span>
+                        </div>
+
+                        <div class="setting-group">
+                            <button id="testMicBtn" class="test-btn" onclick="testMic()">Test Microphone</button>
+                            <button id="testSpeakerBtn" class="test-btn" onclick="testSpeaker()">Test Speakers</button>
+                        </div>
+                    </div>
+
+                    <!-- Video Settings -->
+                    <div id="videoSettings" class="settings-panel">
+                        <h3>Camera</h3>
+                        <div class="setting-group">
+                            <label for="cameraSelect">Camera Device:</label>
+                            <select id="cameraSelect" class="device-select"></select>
+                        </div>
+                        <div class="setting-group">
+                            <label for="videoQuality">Video Quality:</label>
+                            <select id="videoQuality" class="device-select">
+                                <option value="low">Low (480p)</option>
+                                <option value="medium" selected>Medium (720p)</option>
+                                <option value="high">High (1080p)</option>
+                                <option value="ultra">Ultra (1440p)</option>
+                            </select>
+                        </div>
+                        <div class="setting-group">
+                            <label for="frameRate">Frame Rate:</label>
+                            <select id="frameRate" class="device-select">
+                                <option value="15">15 FPS</option>
+                                <option value="30" selected>30 FPS</option>
+                                <option value="60">60 FPS</option>
+                            </select>
+                        </div>
+
+                        <h3>Video Preview</h3>
+                        <div class="video-preview">
+                            <video id="settingsVideoPreview" autoplay muted playsinline></video>
+                            <button id="refreshPreviewBtn" class="test-btn" onclick="refreshPreview()">Refresh Preview</button>
+                        </div>
+                    </div>
+
+                    <!-- General Settings -->
+                    <div id="generalSettings" class="settings-panel">
+                        <h3>Notifications</h3>
+                        <div class="setting-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="messageNotifications" checked>
+                                Message notifications
+                            </label>
+                        </div>
+                        <div class="setting-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="callNotifications" checked>
+                                Call notifications
+                            </label>
+                        </div>
+
+                        <h3>Theme</h3>
+                        <div class="setting-group">
+                            <label for="themeSelect">Theme:</label>
+                            <select id="themeSelect" class="device-select">
+                                <option value="dark" selected>Dark</option>
+                                <option value="light">Light</option>
+                            </select>
+                        </div>
+
+                        <h3>Privacy</h3>
+                        <div class="setting-group">
+                            <label class="checkbox-label">
+                                <input type="checkbox" id="autoAcceptFriends" checked>
+                                Auto-accept friend requests
+                            </label>
+                        </div>
+
+                        <h3>Account</h3>
+                        <div class="setting-group">
+                            <button id="logoutBtn" class="secondary-btn" style="width: 100%;">Logout</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="resetSettingsBtn" class="secondary-btn">Reset to Defaults</button>
+                <button id="saveSettingsBtn" class="primary-btn">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
     <script src="script.js"></script>
 </body>
 </html>

@@ -15,17 +15,12 @@ const server = http.createServer(app);
 const io = socketIO(server, {
     cors: {
         origin: "*",
-        methods: ["GET", "POST"],
-        credentials: true
-    },
-    transports: ['websocket', 'polling']
+        methods: ["GET", "POST"]
+    }
 });
 
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
-
-// Enable trust proxy for Render deployment
-app.set('trust proxy', 1);
 
 // Middleware
 app.use(cors());
@@ -620,21 +615,10 @@ io.on('connection', async (socket) => {
     socket.on('initiate-call', (data) => {
         const { to, type, from } = data;
         console.log(`Call initiated from ${from.id} to ${to}, type: ${type}`);
-
+        
         // Find receiver socket
         const receiverSocket = Array.from(users.values()).find(u => u.id === to);
         if (receiverSocket) {
-            // Check if receiver is already in a call
-            const receiverInCall = Array.from(users.values()).some(u =>
-                u.id === to && u.inCall === true
-            );
-
-            if (receiverInCall) {
-                console.log(`User ${to} is already in a call, rejecting`);
-                socket.emit('call-rejected', { message: 'User is already in a call' });
-                return;
-            }
-
             // Send incoming call notification to receiver
             io.to(receiverSocket.socketId).emit('incoming-call', {
                 from: {
@@ -645,13 +629,6 @@ io.on('connection', async (socket) => {
                 },
                 type: type
             });
-
-            // Mark caller as in call
-            const callerUser = users.get(socket.id);
-            if (callerUser) {
-                callerUser.inCall = true;
-                users.set(socket.id, callerUser);
-            }
         } else {
             // User is offline
             socket.emit('call-rejected', { message: 'User is offline' });
@@ -661,20 +638,7 @@ io.on('connection', async (socket) => {
     socket.on('accept-call', (data) => {
         const { to, from } = data;
         console.log(`Call accepted by ${from.id}, connecting to ${to}`);
-
-        // Mark both users as in call
-        const callerUser = Array.from(users.values()).find(u => u.socketId === to);
-        const receiverUser = users.get(socket.id);
-
-        if (callerUser) {
-            callerUser.inCall = true;
-            users.set(to, callerUser);
-        }
-        if (receiverUser) {
-            receiverUser.inCall = true;
-            users.set(socket.id, receiverUser);
-        }
-
+        
         // Notify the caller that call was accepted
         io.to(to).emit('call-accepted', {
             from: {
@@ -688,14 +652,7 @@ io.on('connection', async (socket) => {
     socket.on('reject-call', (data) => {
         const { to } = data;
         console.log(`Call rejected, notifying ${to}`);
-
-        // Clear call state for caller
-        const callerUser = Array.from(users.values()).find(u => u.socketId === to);
-        if (callerUser) {
-            callerUser.inCall = false;
-            users.set(to, callerUser);
-        }
-
+        
         // Notify the caller that call was rejected
         io.to(to).emit('call-rejected', {
             from: socket.id,
@@ -717,21 +674,6 @@ io.on('connection', async (socket) => {
     // End call
     socket.on('end-call', (data) => {
         const { to } = data;
-        console.log(`Call ended by ${socket.userId}, notifying ${to}`);
-
-        // Clear call state for both users
-        const callerUser = Array.from(users.values()).find(u => u.socketId === to);
-        const receiverUser = users.get(socket.id);
-
-        if (callerUser) {
-            callerUser.inCall = false;
-            users.set(to, callerUser);
-        }
-        if (receiverUser) {
-            receiverUser.inCall = false;
-            users.set(socket.id, receiverUser);
-        }
-
         if (to) {
             io.to(to).emit('call-ended', { from: socket.id });
         }
@@ -740,38 +682,24 @@ io.on('connection', async (socket) => {
     // Handle disconnection
     socket.on('disconnect', async () => {
         const user = users.get(socket.id);
-
+        
         if (user) {
             console.log(`${user.username} disconnected`);
-
-            // If user was in a call, notify the other party
-            if (user.inCall) {
-                console.log(`${user.username} was in a call, notifying other party`);
-                // Find the other user in the call
-                const otherUser = Array.from(users.values()).find(u =>
-                    u.inCall === true && u.socketId !== socket.id
-                );
-                if (otherUser) {
-                    io.to(otherUser.socketId).emit('call-ended', { from: socket.id });
-                    otherUser.inCall = false;
-                    users.set(otherUser.socketId, otherUser);
-                }
-            }
-
+            
             // Update status in database
             try {
                 await userDB.updateStatus(socket.userId, 'Offline');
             } catch (error) {
                 console.error('Error updating status:', error);
             }
-
+            
             rooms.forEach((members, roomName) => {
                 if (members.has(socket.id)) {
                     members.delete(socket.id);
                     io.to(`voice-${roomName}`).emit('user-left-voice', socket.id);
                 }
             });
-
+            
             users.delete(socket.id);
             io.emit('user-list-update', Array.from(users.values()));
         }
